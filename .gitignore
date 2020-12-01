@@ -1,4 +1,4 @@
 wallet.json
-wallet.enc
+*.enc
 .DS_Store
 node_modules

@@ -33,6 +33,8 @@ async function newWallet() {
   const { address, privateKey } = web3.eth.accounts.create()
   console.log(`Generated wallet address: ${address}`)
   const data = JSON.stringify({ address, privateKey })
+  const pathInput = (await readInput('Wallet output path: ')).trim()
+  const walletPath = path.isAbsolute(pathInput) ? pathInput : path.join(process.cwd(), pathInput)
   const password = await readPassword()
   const confirm = await readPassword('Confirm: ')
   if (password !== confirm) throw new Error('Password mismatch')
@@ -40,7 +42,7 @@ async function newWallet() {
     address,
     ...encrypt(data, password)
   })
-  fs.writeFileSync(path.join(__dirname, 'wallet.enc'), enc)
+  fs.writeFileSync(walletPath, enc)
 }
 
 async function readPassword(prompt = 'Password: ') {
@@ -61,16 +63,31 @@ async function readPassword(prompt = 'Password: ') {
     rl.question(prompt, (password) => {
       rs(password)
       rl.close()
-      console.log('\n')
     })
   })
   muted = true
   return await promise
 }
 
+async function readInput(prompt) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: true,
+  })
+  return await new Promise(rs => {
+    rl.question(prompt, (input) => {
+      rs(input)
+      rl.close()
+    })
+  })
+}
+
 async function loadWallet() {
+  const pathInput = (await readInput('Wallet path: ')).trim()
+  const walletPath = path.isAbsolute(pathInput) ? pathInput : path.join(process.cwd(), pathInput)
   const password = await readPassword()
-  const dec = fs.readFileSync(path.join(__dirname, 'wallet.enc'))
+  const dec = fs.readFileSync(walletPath)
   const wallet = decrypt(JSON.parse(dec), password)
   console.log(wallet)
 }
