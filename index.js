@@ -5,6 +5,9 @@ const crypto = require('crypto')
 const readline = require('readline')
 const { Writable } = require('stream')
 
+const providerUrl = 'wss://mainnet.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
+const provider = new Web3.providers.WebsocketProvider(providerUrl)
+
 const alg = 'aes-256-cbc'
 
 function hash(input) {
@@ -89,18 +92,67 @@ async function loadWallet() {
   const password = await readPassword()
   const dec = fs.readFileSync(walletPath)
   const wallet = decrypt(JSON.parse(dec), password)
-  console.log(wallet)
+  return JSON.parse(wallet)
+}
+
+async function sendEth() {
+  const { address, privateKey } = await loadWallet()
+  const web3 = new Web3(provider)
+  const destAddress = (await readInput('Destination address: ')).trim()
+  if (!web3.utils.isAddress(destAddress)) {
+    throw new Error('Invalid address')
+  }
+  const amountEth = (await readInput('Eth Amount: ')).trim()
+  if (isNaN(+amountEth)) {
+    throw new Error('Invalid Ether amount')
+  }
+  const amountWei = web3.utils.toWei(amountEth)
+  const tx = {
+    from: address,
+    to: destAddress,
+    value: amountWei,
+  }
+  const gas = await web3.eth.estimateGas(tx)
+  const gasPrice = await web3.eth.getGasPrice()
+  const data = await web3.eth.accounts.signTransaction({
+    ...tx,
+    gas,
+    gasPrice,
+  }, privateKey)
+  console.log('--------------------')
+  console.log(`Sending ${amountEth} eth from ${address} to ${destAddress} using ${gas} gas at ${Math.floor(gasPrice / 10**9)} gwei`)
+  console.log('--------------------')
+  const confirm = (await readInput('Proceed (y/n): ')).trim()
+  if (confirm !== 'y') {
+    console.log('Aborted')
+    return
+  }
+  console.log('Broadcasting...')
+  const timer = setInterval(() => {
+    console.log('Waiting for block inclusion')
+  }, 2000)
+  const receipt = await web3.eth.sendSignedTransaction(data.rawTransaction)
+  clearInterval(timer)
+  console.log(`Transaction accepted`)
+  console.log(`https://etherscan.io/tx/${data.transactionHash}`)
 }
 
 ;(async () => {
-  const args = process.argv
-  if (args.indexOf('new') !== -1) {
-    await newWallet()
+  try {
+    const args = process.argv
+    if (args.indexOf('new') !== -1) {
+      await newWallet()
+    }
+    if (args.indexOf('load') !== -1) {
+      await loadWallet()
+    }
+    if (args.indexOf('send') !== -1) {
+      // send a tx
+      await sendEth()
+    }
+  } catch (err) {
+    console.log(err)
+    process.exit(1)
   }
-  if (args.indexOf('load') !== -1) {
-    await loadWallet()
-  }
-  if (args.indexOf('send') !== -1) {
-    // send a tx
-  }
+  process.exit(0)
 })()
