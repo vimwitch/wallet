@@ -6,6 +6,7 @@ const readline = require('readline')
 const { Writable } = require('stream')
 
 const providerUrl = 'wss://mainnet.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
+// const providerUrl = 'wss://rinkeby.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
 const provider = new Web3.providers.WebsocketProvider(providerUrl)
 
 const alg = 'aes-256-cbc'
@@ -112,8 +113,10 @@ async function sendEth() {
     to: destAddress,
     value: amountWei,
   }
-  const gas = await web3.eth.estimateGas(tx)
-  const gasPrice = await web3.eth.getGasPrice()
+  const [ gas, gasPrice ] = await Promise.all([
+    web3.eth.estimateGas(tx),
+    web3.eth.getGasPrice(),
+  ])
   const data = await web3.eth.accounts.signTransaction({
     ...tx,
     gas,
@@ -137,6 +140,15 @@ async function sendEth() {
   console.log(`https://etherscan.io/tx/${data.transactionHash}`)
 }
 
+async function signMessage() {
+  const { address, privateKey } = await loadWallet()
+  const web3 = new Web3(provider)
+  const text = (await readInput('Message to sign: ')).trim()
+  const { messageHash, message } = web3.eth.accounts.sign(text, privateKey)
+  console.log(`Message: ${message}`)
+  console.log(`Hash: ${messageHash}`)
+}
+
 ;(async () => {
   try {
     const args = process.argv
@@ -149,6 +161,9 @@ async function sendEth() {
     if (args.indexOf('send') !== -1) {
       // send a tx
       await sendEth()
+    }
+    if (args.indexOf('sign') !== -1) {
+      await signMessage()
     }
   } catch (err) {
     console.log(err)
