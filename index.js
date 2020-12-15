@@ -96,6 +96,13 @@ async function loadWallet() {
   return JSON.parse(wallet)
 }
 
+async function loadBalance() {
+  const web3 = new Web3(provider)
+  const wallet = await loadWallet()
+  const balance = await web3.eth.getBalance(wallet.address)
+  console.log(`Balance for ${wallet.address}: ${web3.utils.fromWei(balance)} Eth`)
+}
+
 async function sendEth() {
   const { address, privateKey } = await loadWallet()
   const web3 = new Web3(provider)
@@ -157,6 +164,9 @@ async function signMessage() {
     }
     if (args.indexOf('load') !== -1) {
       await loadWallet()
+    }
+    if (args.indexOf('balance') !== -1) {
+      await loadBalance()
     }
     if (args.indexOf('send') !== -1) {
       // send a tx
