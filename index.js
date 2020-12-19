@@ -4,6 +4,11 @@ const path = require('path')
 const crypto = require('crypto')
 const readline = require('readline')
 const { Writable } = require('stream')
+const {
+  recoverKeystore,
+  generateKeystore,
+} = require('ethereum-keystore')
+const BN = require('bn.js')
 
 const providerUrl = 'wss://mainnet.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
 // const providerUrl = 'wss://rinkeby.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
@@ -42,11 +47,8 @@ async function newWallet() {
   const password = await readPassword()
   const confirm = await readPassword('Confirm: ')
   if (password !== confirm) throw new Error('Password mismatch')
-  const enc = JSON.stringify({
-    address,
-    ...encrypt(data, password)
-  })
-  fs.writeFileSync(walletPath, enc)
+  const keystore = await generateKeystore(privateKey, password)
+  fs.writeFileSync(walletPath, JSON.stringify(keystore))
 }
 
 async function readPassword(prompt = 'Password: ') {
@@ -88,18 +90,19 @@ async function readInput(prompt) {
 }
 
 async function loadWallet() {
+  const web3 = new Web3()
   const pathInput = (await readInput('Wallet path: ')).trim()
   const walletPath = path.isAbsolute(pathInput) ? pathInput : path.join(process.cwd(), pathInput)
   const password = await readPassword()
-  const dec = fs.readFileSync(walletPath)
-  const wallet = decrypt(JSON.parse(dec), password)
-  return JSON.parse(wallet)
+  const dec = fs.readFileSync(walletPath).toString()
+  const privateKey = await recoverKeystore(JSON.parse(dec), password)
+  return web3.eth.accounts.privateKeyToAccount(privateKey)
 }
 
 async function loadBalance() {
   const web3 = new Web3(provider)
   const wallet = await loadWallet()
-  const balance = await web3.eth.getBalance(wallet.address)
+  const balance = await web3.eth.getBalance(web3.utils.toChecksumAddress(wallet.address))
   console.log(`Balance for ${wallet.address}: ${web3.utils.fromWei(balance)} Eth`)
 }
 
@@ -110,20 +113,32 @@ async function sendEth() {
   if (!web3.utils.isAddress(destAddress)) {
     throw new Error('Invalid address')
   }
+  // estimate gas for 0 cost tx
+  const _gasPrice = web3.eth.getGasPrice()
+  const _emptyTxGas = web3.eth.estimateGas({
+    to: destAddress,
+    value: new BN('1')
+  })
   const amountEth = (await readInput('Eth Amount: ')).trim()
-  if (isNaN(+amountEth)) {
+  const isMax = amountEth.toLowerCase() === 'max'
+  if (isNaN(+amountEth) && !isMax) {
     throw new Error('Invalid Ether amount')
   }
-  const amountWei = web3.utils.toWei(amountEth)
+  const gasPrice = new BN((await _gasPrice)).div(new BN('10')).add(new BN(await _gasPrice))
+  let amountWei
+  if (isMax) {
+    const balance = await web3.eth.getBalance(address)
+    amountWei = new BN(balance).sub(new BN((await _emptyTxGas)).mul(gasPrice))
+    console.log(amountWei.toString())
+  } else {
+    amountWei = web3.utils.toWei(amountEth)
+  }
   const tx = {
     from: address,
     to: destAddress,
     value: amountWei,
   }
-  const [ gas, gasPrice ] = await Promise.all([
-    web3.eth.estimateGas(tx),
-    web3.eth.getGasPrice(),
-  ])
+  const gas = await web3.eth.estimateGas(tx)
   const data = await web3.eth.accounts.signTransaction({
     ...tx,
     gas,
