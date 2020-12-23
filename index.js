@@ -171,6 +171,17 @@ async function signMessage() {
   console.log(`Hash: ${messageHash}`)
 }
 
+async function update() {
+  const web3 = new Web3()
+  const pathInput = (await readInput('Wallet path: ')).trim()
+  const walletPath = path.isAbsolute(pathInput) ? pathInput : path.join(process.cwd(), pathInput)
+  const password = await readPassword()
+  const data = fs.readFileSync(walletPath).toString()
+  const dec = await decrypt(JSON.parse(data), password)
+  const keystore = await generateKeystore(JSON.parse(dec).privateKey, password)
+  fs.writeFileSync(`${walletPath}.updated`, JSON.stringify(keystore))
+}
+
 ;(async () => {
   try {
     const args = process.argv
@@ -189,6 +200,9 @@ async function signMessage() {
     }
     if (args.indexOf('sign') !== -1) {
       await signMessage()
+    }
+    if (args.indexOf('update') !== -1) {
+      await update()
     }
   } catch (err) {
     console.log(err)
