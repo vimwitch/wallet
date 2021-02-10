@@ -9,6 +9,7 @@ const {
   generateKeystore,
 } = require('ethereum-keystore')
 const BN = require('bn.js')
+const { ERC20ABI, addresses } = require('./tokens')
 
 const providerUrl = 'wss://mainnet.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
 // const providerUrl = 'wss://rinkeby.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
@@ -162,6 +163,66 @@ async function sendEth() {
   console.log(`https://etherscan.io/tx/${data.transactionHash}`)
 }
 
+async function sendToken() {
+  const { address, privateKey } = await loadWallet()
+  const web3 = new Web3(provider)
+  const token = (await readInput('Token Symbol: ')).trim().toLowerCase()
+  if (!addresses[token]) {
+    throw new Error('Unknown token')
+  }
+  const destAddress = (await readInput('Destination address: ')).trim()
+  if (!web3.utils.isAddress(destAddress)) {
+    throw new Error('Invalid address')
+  }
+  const amount = (await readInput('Token Amount: ')).trim()
+  const Token = new web3.eth.Contract(ERC20ABI, addresses[token])
+  const [ decimals, balance ] = await Promise.all([
+    Token.methods.decimals().call(),
+    Token.methods.balanceOf(address).call(),
+  ])
+  const decimalPow = new BN('10').pow(new BN(decimals))
+  const isMax = amount.toLowerCase() === 'max'
+  if (isNaN(+amount) && !isMax) {
+    throw new Error('Invalid token amount')
+  }
+  if (!isMax && new BN(amount).mul(decimalPow).gt(new BN(balance))) {
+    throw new Error('Insufficient funds')
+  }
+  let amountWithDecimals
+  if (isMax) {
+    amountWithDecimals = new BN(balance)
+  } else {
+    amountWithDecimals = new BN(amount).mul(decimalPow)
+  }
+  const [ gas, gasPrice ] = await Promise.all([
+    Token.methods.transfer(destAddress, amountWithDecimals).estimateGas({
+      from: address,
+    }),
+    web3.eth.getGasPrice(),
+  ])
+  const humanReadableAmount = amountWithDecimals.div(decimalPow).toString()
+  console.log('--------------------')
+  console.log(`Sending ${humanReadableAmount} ${token} from ${address} to ${destAddress} using ${gas} gas at ${Math.floor(gasPrice / 10**9)} gwei (${web3.utils.fromWei(new BN(gasPrice).mul(new BN(gas)))} Eth)`)
+  console.log('--------------------')
+  const confirm = (await readInput('Proceed (y/n): ')).trim()
+  if (confirm !== 'y') {
+    console.log('Aborted')
+    return
+  }
+  console.log('Broadcasting...')
+  const timer = setInterval(() => {
+    console.log('Waiting for block inclusion')
+  }, 2000)
+  const receipt = await Token.methods.transfer(destAddress, amountWithDecimals).send({
+    from: address,
+    gas,
+    gasPrice,
+  })
+  clearInterval(timer)
+  console.log(`Transaction accepted`)
+  console.log(`https://etherscan.io/tx/${data.transactionHash}`)
+}
+
 async function signMessage() {
   const { address, privateKey } = await loadWallet()
   const web3 = new Web3(provider)
@@ -197,6 +258,9 @@ async function update() {
     if (args.indexOf('send') !== -1) {
       // send a tx
       await sendEth()
+    }
+    if (args.indexOf('sendToken') !== -1) {
+      await sendToken()
     }
     if (args.indexOf('sign') !== -1) {
       await signMessage()
