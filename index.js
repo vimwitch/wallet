@@ -11,7 +11,7 @@ const {
 const BN = require('bn.js')
 const { ERC20ABI, addresses } = require('./tokens')
 
-const providerUrl = 'wss://mainnet.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
+const providerUrl = 'wss://mainnet.infura.io/ws/v3/b61c1da2a8db4d7ca209e7603b613754'
 // const providerUrl = 'wss://rinkeby.infura.io/ws/v3/5b122dbc87ed4260bf9a2031e8a0e2aa'
 const provider = new Web3.providers.WebsocketProvider(providerUrl)
 
@@ -213,12 +213,16 @@ async function sendToken() {
   const timer = setInterval(() => {
     console.log('Waiting for block inclusion')
   }, 2000)
-  const receipt = await Token.methods.transfer(destAddress, amountWithDecimals).send({
+  const data = Token.methods.transfer(destAddress, amountWithDecimals).encodeABI()
+  const signedTx = await web3.eth.accounts.signTransaction({
     from: address,
+    to: addresses[token],
     gas,
     gasPrice,
-  })
+    data,
+  }, privateKey)
   clearInterval(timer)
+  const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction)
   console.log(`Transaction accepted`)
   console.log(`https://etherscan.io/tx/${data.transactionHash}`)
 }
