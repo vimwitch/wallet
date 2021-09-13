@@ -1,4 +1,5 @@
 const Web3 = require('web3')
+const axios = require('axios')
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
@@ -166,20 +167,12 @@ async function sendEth() {
 async function sendToken() {
   const { address, privateKey } = await loadWallet()
   const web3 = new Web3(provider)
-  const token = (await readInput('Token Symbol: ')).trim().toLowerCase()
-  if (!addresses[token]) {
-    throw new Error('Unknown token')
-  }
+  const { symbol, Token, decimals, balance, tokenAddress } = await readToken(address)
   const destAddress = (await readInput('Destination address: ')).trim()
   if (!web3.utils.isAddress(destAddress)) {
     throw new Error('Invalid address')
   }
   const amount = (await readInput('Token Amount: ')).trim()
-  const Token = new web3.eth.Contract(ERC20ABI, addresses[token])
-  const [ decimals, balance ] = await Promise.all([
-    Token.methods.decimals().call(),
-    Token.methods.balanceOf(address).call(),
-  ])
   const decimalPow = new BN('10').pow(new BN(decimals))
   const isMax = amount.toLowerCase() === 'max'
   if (isNaN(+amount) && !isMax) {
@@ -202,7 +195,8 @@ async function sendToken() {
   ])
   const humanReadableAmount = amountWithDecimals.div(decimalPow).toString()
   console.log('--------------------')
-  console.log(`Sending ${humanReadableAmount} ${token} from ${address} to ${destAddress} using ${gas} gas at ${Math.floor(gasPrice / 10**9)} gwei (${web3.utils.fromWei(new BN(gasPrice).mul(new BN(gas)))} Eth)`)
+  console.log(`Sending ${humanReadableAmount} ${symbol} from ${address} to ${destAddress} using ${gas} gas at ${Math.floor(gasPrice / 10**9)} gwei (${web3.utils.fromWei(new BN(gasPrice).mul(new BN(gas)))} Eth)`)
+  console.log(`Token contract: ${tokenAddress}`)
   console.log('--------------------')
   const confirm = (await readInput('Proceed (y/n): ')).trim()
   if (confirm !== 'y') {
@@ -216,13 +210,14 @@ async function sendToken() {
   const data = Token.methods.transfer(destAddress, amountWithDecimals).encodeABI()
   const signedTx = await web3.eth.accounts.signTransaction({
     from: address,
-    to: addresses[token],
+    to: tokenAddress,
     gas,
-    gasPrice,
+    type: 0x2,
+    maxFeePerGas: gasPrice,
     data,
   }, privateKey)
-  clearInterval(timer)
   const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+  clearInterval(timer)
   console.log(`Transaction accepted`)
   console.log(`https://etherscan.io/tx/${data.transactionHash}`)
 }
@@ -245,6 +240,99 @@ async function update() {
   const dec = await decrypt(JSON.parse(data), password)
   const keystore = await generateKeystore(JSON.parse(dec).privateKey, password)
   fs.writeFileSync(`${walletPath}.updated`, JSON.stringify(keystore))
+}
+
+async function swap() {
+  const { address, privateKey } = await loadWallet()
+  const { symbol: fromToken, Token, decimals, balance, tokenAddress } = await readToken(address, 'From token: ')
+  const toToken = await readInput('To token: ')
+  const amountText = await readInput('Amount: ')
+  const amountDecimal = amountText === 'max' ? new BN(balance) : (new BN(amountText).mul(new BN('10').pow(new BN(decimals))))
+  const amount = amountDecimal.div(new BN('10').pow(new BN(decimals)))
+  const maxSlip = '0.01' // 1%
+  let data
+  try {
+    const { data: _data } = await axios('https://api.0x.org/swap/v1/quote', {
+      params: {
+        sellToken: fromToken,
+        buyToken: toToken,
+        slippagePercentage: maxSlip,
+        sellAmount: amountDecimal.toString(),
+      }
+    })
+    data = _data
+  } catch (err) {
+    console.log(err)
+    console.log('Error with 0x api')
+    return
+  }
+  const {
+    decimals: toDecimals,
+    symbol: toSymbol,
+  } = await loadToken(data.buyTokenAddress)
+  const toAmount = new BN(data.buyAmount).div(new BN('10').pow(new BN(toDecimals)))
+  console.log('--------------------')
+  console.log('Approving funds for transaction')
+  console.log('--------------------')
+  {
+    const confirm = (await readInput('Proceed (y/n): ')).trim()
+    if (confirm !== 'y') {
+      console.log('Aborted')
+      return
+    }
+  }
+  const web3 = new Web3(provider)
+  const approveTx = Token.methods.approve(data.to, amountDecimal).encodeABI()
+  {
+    // const signedTx = await web3.eth.accounts.signTransaction({
+    //   from: address,
+    //   to: tokenAddress,
+    //   gas: 100000,
+    //   gasPrice: data.gasPrice,
+    //   data: approveTx,
+    // }, privateKey)
+    // await web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+  }
+  console.log('--------------------')
+  console.log(`Trading ${amount} ${fromToken} for ${toAmount} ${toSymbol} with a max slippage of ${+maxSlip * 100}%.`)
+  console.log(`Gas price: ${data.gasPrice}`)
+  console.log('--------------------')
+  const confirm = (await readInput('Proceed (y/n): ')).trim()
+  if (confirm !== 'y') {
+    console.log('Aborted')
+    return
+  }
+  console.log('Broadcasting...')
+  const signedTx = await web3.eth.accounts.signTransaction({
+    from: address,
+    to: data.to,
+    gas: Math.ceil(1.4 * +data.gas),
+    gasPrice: data.gasPrice,
+    data: data.data,
+  }, privateKey)
+  const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+  clearInterval(timer)
+  console.log(`Transaction accepted`)
+  console.log(`https://etherscan.io/tx/${data.transactionHash}`)
+}
+
+async function readToken(ownerAddress, message = 'Token Symbol: ') {
+  const symbol = (await readInput(message)).trim().toLowerCase()
+  if (!addresses[symbol]) {
+    throw new Error('Unknown token')
+  }
+  return loadToken(addresses[symbol], ownerAddress)
+}
+
+async function loadToken(tokenAddress, ownerAddress) {
+  const web3 = new Web3(provider)
+  const Token = new web3.eth.Contract(ERC20ABI, tokenAddress)
+  const [ decimals, symbol, balance ] = await Promise.all([
+    Token.methods.decimals().call(),
+    Token.methods.symbol().call(),
+    ownerAddress ? Token.methods.balanceOf(ownerAddress).call() : Promise.resolve(),
+  ])
+  return { symbol, decimals, balance, Token, tokenAddress }
 }
 
 ;(async () => {
@@ -271,6 +359,9 @@ async function update() {
     }
     if (args.indexOf('update') !== -1) {
       await update()
+    }
+    if (args.indexOf('swap') !== -1) {
+      await swap()
     }
   } catch (err) {
     console.log(err)
